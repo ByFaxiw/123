@@ -1,0 +1,7 @@
+aiogram>=3.4
+SQLAlchemy>=2.0
+aiosqlite
+aiofiles
+openpyxl
+patool
+patoolib

@@ -1,0 +1,9 @@
+API_ID = 35924629
+
+API_HASH = "6b95e567b07b41e80dd712a14a89f50f"
+
+BOT_TOKEN = "8298969194:AAEYIGAJq2OIm_Wo-kTiXA0yGkN_HFEQ0sQ"
+
+TEMP_DIR = "temp"
+
+DB_URL = "sqlite+aiosqlite:///photos.db"
