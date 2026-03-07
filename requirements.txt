@@ -4,4 +4,3 @@ aiosqlite
 aiofiles
 openpyxl
 patool==2.3.0
-patoolib
