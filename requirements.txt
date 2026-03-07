@@ -3,5 +3,5 @@ SQLAlchemy>=2.0
 aiosqlite
 aiofiles
 openpyxl
-patool
+patool==2.3.0
 patoolib
