@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, DateTime
 from datetime import datetime
 from database import Base
 from sqlalchemy import Column, Integer, String
-from database import Base # Импортируем из database, а не наоборот!
+from database import Base # Импортируем ОДИН раз отсюда
 
 class User(Base):
     __tablename__ = "users"
@@ -10,6 +10,7 @@ class User(Base):
     tg_id = Column(Integer, unique=True)
     username = Column(String)
     status = Column(String, default="pending")
+    # ... остальные поля
     
 
 # Таблица для пользователей (регистрация + опрос + статус)
