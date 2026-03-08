@@ -1,281 +1,345 @@
 import os
-import shutil
 import random
+import re
 
 from pyrogram import Client, filters
 from pyrogram.types import (
-    Message,
     InlineKeyboardMarkup,
-    InlineKeyboardButton
+    InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton
 )
-
-from config import API_ID, API_HASH, BOT_TOKEN, TEMP_DIR
-
-from database import SessionLocal
-from models import Photo
-
-from processor import unpack_archive, walk_files, crc32_file
-from excel_report import create_excel
 
 from sqlalchemy import select
 
-
-os.makedirs(TEMP_DIR, exist_ok=True)
+from config import *
+from database import SessionLocal
+from models import User
 
 
 app = Client(
-    "dedupe_bot",
+    "bot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
 
 
-users_passed_test = set()
-users_passed_survey = {}
+bot_tests = {}
+survey_state = {}
 
 
-# ========================
-# START + TEST
-# ========================
+# ================= START =================
 
 @app.on_message(filters.command("start"))
-async def start(client, message: Message):
+async def start(client, message):
+
+    async with SessionLocal() as session:
+
+        res = await session.execute(
+            select(User).where(User.tg_id == message.from_user.id)
+        )
+
+        user = res.scalar_one_or_none()
+
+        if user:
+
+            if user.status == "banned":
+                await message.reply("Вы заблокированы.")
+                return
+
+            if user.status == "approved":
+                await show_menu(message)
+                return
 
     emojis = ["😀","😎","🤖","🐱","🔥","🍕","🚀","🎧","⭐"]
 
     correct = random.choice(emojis)
 
+    bot_tests[message.from_user.id] = correct
+
     random.shuffle(emojis)
 
     keyboard = []
 
-    for i in range(0, 9, 3):
+    for i in range(0,9,3):
 
-        row = []
+        row=[]
 
         for e in emojis[i:i+3]:
-
             row.append(
-                InlineKeyboardButton(
-                    e,
-                    callback_data=f"emoji_{e}_{correct}"
-                )
+                InlineKeyboardButton(e,callback_data=f"test_{e}")
             )
 
         keyboard.append(row)
 
     await message.reply(
 
-        f"🤖 Проверка на бота\n\n"
+        "Привет. Это бот тимы zippaoffer.\n\n"
         f"Нажмите на смайлик {correct}",
 
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
-# ========================
-# CHECK TEST
-# ========================
+# ================= TEST =================
 
-@app.on_callback_query(filters.regex("emoji_"))
-async def emoji_check(client, callback):
+@app.on_callback_query(filters.regex("test_"))
+async def test(client, callback):
 
-    data = callback.data.split("_")
+    emoji = callback.data.split("_")[1]
 
-    chosen = data[1]
-    correct = data[2]
+    correct = bot_tests.get(callback.from_user.id)
 
-    user_id = callback.from_user.id
+    if emoji != correct:
 
-    if chosen == correct:
+        await callback.answer("Неверно",show_alert=True)
+        return
 
-        users_passed_test.add(user_id)
+    await callback.message.edit_text("Проверка пройдена")
 
-        await callback.message.edit_text(
-            "✅ Проверка пройдена!\n\n"
-            "Теперь ответьте на несколько вопросов."
-        )
+    survey_state[callback.from_user.id] = "source"
 
-        await ask_question1(callback.message)
-
-    else:
-
-        await callback.answer("❌ Неправильно", show_alert=True)
-
-
-# ========================
-# QUESTION 1
-# ========================
-
-async def ask_question1(message):
-
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Telegram", callback_data="src_tg")],
-        [InlineKeyboardButton("TikTok", callback_data="src_tt")],
-        [InlineKeyboardButton("Друзья", callback_data="src_friends")],
-        [InlineKeyboardButton("Другое", callback_data="src_other")]
-    ])
-
-    await message.reply(
-        "❓ Откуда вы узнали о тиме?",
-        reply_markup=keyboard
+    await callback.message.reply(
+        "1️⃣ Откуда вы узнали о тиме?",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("TikTok",callback_data="src_tt")],
+            [InlineKeyboardButton("Telegram",callback_data="src_tg")],
+            [InlineKeyboardButton("От друга",callback_data="src_friend")],
+            [InlineKeyboardButton("Другое",callback_data="src_other")]
+        ])
     )
 
 
-# ========================
-# ANSWER 1
-# ========================
+# ================= SOURCE =================
 
 @app.on_callback_query(filters.regex("src_"))
-async def answer1(client, callback):
+async def source(client, callback):
 
-    user_id = callback.from_user.id
+    survey_state[callback.from_user.id] = callback.data
 
-    users_passed_survey[user_id] = {
-        "source": callback.data
-    }
+    if callback.data == "src_tt":
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Да", callback_data="team_yes")],
-        [InlineKeyboardButton("Нет", callback_data="team_no")]
-    ])
+        survey_state[callback.from_user.id] = "teams"
 
-    await callback.message.edit_text(
-        "❓ Были ли вы в подобных тимах?",
-        reply_markup=keyboard
-    )
+        await callback.message.reply("2️⃣ Были ли в похожих тимах?")
+        return
 
+    if callback.data == "src_tg":
 
-# ========================
-# ANSWER 2
-# ========================
+        survey_state[callback.from_user.id] = "tg_detail"
 
-@app.on_callback_query(filters.regex("team_"))
-async def answer2(client, callback):
+        await callback.message.reply("Напишите где именно в Telegram")
+        return
 
-    user_id = callback.from_user.id
+    if callback.data == "src_friend":
 
-    users_passed_survey[user_id]["team"] = callback.data
+        survey_state[callback.from_user.id] = "friend_detail"
 
-    await callback.message.edit_text(
-        "✅ Спасибо за ответы!\n\n"
-        "Теперь вы можете пользоваться ботом.\n"
-        "Отправьте архив с фотографиями."
-    )
+        await callback.message.reply("Напишите username друга")
+        return
 
+    if callback.data == "src_other":
 
-# ========================
-# ARCHIVE HANDLER
-# ========================
+        survey_state[callback.from_user.id] = "other_detail"
 
-@app.on_message(filters.document)
-async def handle_archive(client, message: Message):
-
-    user_id = message.from_user.id
-
-    if user_id not in users_passed_survey:
-
-        await message.reply(
-            "❌ Сначала пройдите проверку.\n"
-            "Напишите /start"
-        )
+        await callback.message.reply("Напишите источник")
         return
 
 
-    doc = message.document
+# ================= TEXT ANSWERS =================
 
-    if not doc.file_name.endswith((".zip", ".rar")):
+@app.on_message(filters.text & ~filters.command)
+async def survey_text(client,message):
 
-        await message.reply("Нужен архив .zip или .rar")
+    uid = message.from_user.id
+
+    state = survey_state.get(uid)
+
+    if not state:
         return
-
-
-    user_dir = os.path.join(TEMP_DIR, str(user_id))
-    os.makedirs(user_dir, exist_ok=True)
-
-    archive_path = os.path.join(user_dir, doc.file_name)
-
-
-    await message.reply("⬇️ Скачиваю архив...")
-
-    await message.download(file_name=archive_path)
-
-
-    extract_dir = os.path.join(user_dir, "extract")
-    os.makedirs(extract_dir, exist_ok=True)
-
-    await message.reply("📦 Распаковываю...")
-
-    unpack_archive(archive_path, extract_dir)
-
-
-    files = walk_files(extract_dir)
-
-    total = len(files)
-    new = 0
-    dup = 0
-
-    rows = []
-
 
     async with SessionLocal() as session:
 
-        for f in files:
+        res = await session.execute(select(User).where(User.tg_id == uid))
 
-            crc = crc32_file(f)
+        user = res.scalar_one_or_none()
 
-            res = await session.execute(
-                select(Photo).where(Photo.crc32_hash == crc)
+        if not user:
+
+            user = User(
+                tg_id=uid,
+                username=message.from_user.username
             )
 
-            exists = res.scalar_one_or_none()
+            session.add(user)
 
-            if exists:
+        if state == "tg_detail":
+            user.source="telegram"
+            user.source_detail=message.text
+            survey_state[uid]="teams"
+            await message.reply("2️⃣ Были ли в похожих тимах?")
+            return
 
-                status = "Duplicate"
-                dup += 1
+        if state == "friend_detail":
+            user.source="friend"
+            user.source_detail=message.text
+            survey_state[uid]="teams"
+            await message.reply("2️⃣ Были ли в похожих тимах?")
+            return
 
-            else:
+        if state == "other_detail":
+            user.source="other"
+            user.source_detail=message.text
+            survey_state[uid]="teams"
+            await message.reply("2️⃣ Были ли в похожих тимах?")
+            return
 
-                status = "New"
-                new += 1
+        if state == "teams":
+            user.teams = message.text
+            survey_state[uid]="reason"
+            await message.reply("3️⃣ Почему хотите вступить к нам?")
+            return
 
-                photo = Photo(
-                    crc32_hash=crc,
-                    file_name=os.path.basename(f),
-                    user_id=user_id
-                )
+        if state == "reason":
 
-                session.add(photo)
+            user.reason = message.text
 
-            rows.append([
-                os.path.basename(f),
-                status,
-                crc,
-                ""
-            ])
+            await session.commit()
+
+            text=f"""
+Новая заявка
+
+ID: {uid}
+Username: @{message.from_user.username}
+
+Источник: {user.source}
+Детали: {user.source_detail}
+
+Был в тимах: {user.teams}
+
+Причина: {user.reason}
+"""
+
+            await app.send_message(
+                1077122199,
+                text,
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("Принять",callback_data=f"approve_{uid}"),
+                        InlineKeyboardButton("Отклонить",callback_data=f"deny_{uid}")
+                    ]
+                ])
+            )
+
+            await message.reply("Заявка отправлена админу")
+
+            survey_state.pop(uid)
+
+            await session.commit()
+
+
+# ================= ADMIN =================
+
+@app.on_callback_query(filters.regex("approve_"))
+async def approve(client,callback):
+
+    uid=int(callback.data.split("_")[1])
+
+    async with SessionLocal() as session:
+
+        res=await session.execute(select(User).where(User.tg_id==uid))
+        user=res.scalar_one()
+
+        user.status="approved"
 
         await session.commit()
 
-
-    report_path = os.path.join(user_dir, "report.xlsx")
-
-    create_excel(rows, report_path)
+    await app.send_message(uid,"Ваша заявка одобрена")
 
 
-    await message.reply(
-        f"📊 Результат\n\n"
-        f"Всего: {total}\n"
-        f"Новых: {new}\n"
-        f"Повторов: {dup}"
+
+@app.on_callback_query(filters.regex("deny_"))
+async def deny(client,callback):
+
+    uid=int(callback.data.split("_")[1])
+
+    async with SessionLocal() as session:
+
+        res=await session.execute(select(User).where(User.tg_id==uid))
+        user=res.scalar_one()
+
+        user.status="banned"
+
+        await session.commit()
+
+    await app.send_message(uid,"Ваша заявка отклонена")
+
+
+# ================= MENU =================
+
+async def show_menu(message):
+
+    kb=ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("Сдать архив")],
+            [KeyboardButton("Поддержка"),KeyboardButton("Ссылка на чат")],
+            [KeyboardButton("Профиль")]
+        ],
+        resize_keyboard=True
     )
 
+    await message.reply("Меню",reply_markup=kb)
 
-    await message.reply_document(report_path)
+
+# ================= PROFILE =================
+
+@app.on_message(filters.regex("Профиль"))
+async def profile(client,message):
+
+    async with SessionLocal() as session:
+
+        res=await session.execute(select(User).where(User.tg_id==message.from_user.id))
+        user=res.scalar_one()
+
+        text=f"""
+Профиль
+
+Username: @{user.username}
+ID: {user.tg_id}
+
+Архивов сдано: {user.archives}
+
+Всего выплат: {user.payouts}
+"""
+
+        await message.reply(text)
 
 
-    shutil.rmtree(user_dir, ignore_errors=True)
+# ================= ARCHIVE =================
+
+@app.on_message(filters.regex("Сдать архив"))
+async def ask_archive(client,message):
+
+    await message.reply("Отправьте архив")
+
+
+@app.on_message(filters.document)
+async def archive(client,message):
+
+    name=message.document.file_name
+
+    if not (name.endswith(".zip") or name.endswith(".rar")):
+
+        await message.reply("Только zip или rar")
+        return
+
+    if not re.match(r"\d+_\d{2}-\d{2}",name):
+
+        await message.reply("Название должно быть: количествоскринов_день-месяц")
+        return
+
+    await message.reply("Архив принят")
 
 
 app.run()
