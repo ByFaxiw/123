@@ -1,6 +1,16 @@
 from sqlalchemy import Column, Integer, String, DateTime
 from datetime import datetime
 from database import Base
+from sqlalchemy import Column, Integer, String
+from database import Base # Импортируем из database, а не наоборот!
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True)
+    tg_id = Column(Integer, unique=True)
+    username = Column(String)
+    status = Column(String, default="pending")
+    
 
 # Таблица для пользователей (регистрация + опрос + статус)
 class User(Base):
