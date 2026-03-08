@@ -1,6 +1,8 @@
 import os
 import random
 import re
+from models import User
+from database import Session, init_db
 
 from pyrogram import Client, filters
 from pyrogram.types import (
