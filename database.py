@@ -1,9 +1,10 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from sqlalchemy.orm import declarative_base
-from config import DB_URL
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from models import Base
 
-engine = create_async_engine(DB_URL)
+engine = create_engine("sqlite:///bot.db")
 
-SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+Session = sessionmaker(bind=engine)
 
-Base = declarative_base()
+def init_db():
+    Base.metadata.create_all(engine)
